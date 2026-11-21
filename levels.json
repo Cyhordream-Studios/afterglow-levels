@@ -1,4 +1,11 @@
 {
   "format": "afterglow-levels",
-  "levels": []
+  "levels": [  {
+      "packageId": "test-level",
+      "title": "Test",
+      "artist": "Bot",
+      "version": "20260101",
+      "file": "levels/test-level/20260101.zip",
+      "size": 22,
+      "updatedAt": "2026-11-21T20:06:43.865Z"]
 }
