@@ -1,11 +1,23 @@
 {
   "format": "afterglow-levels",
-  "levels": [  {
+  "levels": [
+    {
+      "packageId": "song-mwqxjecp-15gf7u",
+      "title": "Night Drift Riot",
+      "artist": "BeastboyblueCat",
+      "version": "20261121215205",
+      "file": "levels/song-mwqxjecp-15gf7u/20261121215205.zip",
+      "size": 4333278,
+      "updatedAt": "2026-11-21T21:52:05.627Z"
+    },
+    {
       "packageId": "test-level",
       "title": "Test",
       "artist": "Bot",
       "version": "20260101",
       "file": "levels/test-level/20260101.zip",
       "size": 22,
-      "updatedAt": "2026-11-21T20:06:43.865Z"}]
+      "updatedAt": "2026-11-21T20:06:43.865Z"
+    }
+  ]
 }
