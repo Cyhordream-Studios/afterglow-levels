@@ -2,6 +2,15 @@
   "format": "afterglow-levels",
   "levels": [
     {
+      "packageId": "song-mwqynadw-q1t48a",
+      "title": "RAVIOLI",
+      "artist": "VIRCEIUS",
+      "version": "20261121220923",
+      "file": "levels/song-mwqynadw-q1t48a/20261121220923.zip",
+      "size": 4177275,
+      "updatedAt": "2026-11-21T22:09:23.687Z"
+    },
+    {
       "packageId": "song-mwqxjecp-15gf7u",
       "title": "Night Drift Riot",
       "artist": "BeastboyblueCat",
