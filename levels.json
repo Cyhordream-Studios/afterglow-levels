@@ -1,4 +1,14 @@
 {
   "format": "afterglow-levels",
-  "levels": []
+  "levels": [
+    {
+      "packageId": "song-mwr0t584-gceh0w",
+      "title": "Night Drift Riot",
+      "artist": "BeastboyblueCat",
+      "version": "20261121231028",
+      "file": "levels/song-mwr0t584-gceh0w/20261121231028.zip",
+      "size": 4367577,
+      "updatedAt": "2026-11-21T23:10:29.022Z"
+    }
+  ]
 }
