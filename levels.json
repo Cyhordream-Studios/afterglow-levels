@@ -1,14 +1,4 @@
 {
   "format": "afterglow-levels",
-  "levels": [
-    {
-      "packageId": "song-mwrps9bp-kgkt8w",
-      "title": "GALACTIC TAPESTRY",
-      "artist": "BeastboyblueCat",
-      "version": "20261122104912",
-      "file": "levels/song-mwrps9bp-kgkt8w/20261122104912.zip",
-      "size": 6447771,
-      "updatedAt": "2026-11-22T10:49:13.091Z"
-    }
-  ]
+  "levels": []
 }
