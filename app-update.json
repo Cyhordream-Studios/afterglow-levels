@@ -1,0 +1,14 @@
+{
+  "version": "1.0.1",
+  "notes": "",
+  "files": [
+    "app.js",
+    "index.html",
+    "style.css",
+    "extras.css",
+    "main.cjs",
+    "preload.cjs",
+    "package.json"
+  ],
+  "updatedAt": "2026-11-22T23:46:39.674Z"
+}
