@@ -1,5 +1,5 @@
 {
-  "version": "1.0.1",
+  "version": "1.0.0",
   "notes": "",
   "files": [
     "app.js",
@@ -10,5 +10,5 @@
     "preload.cjs",
     "package.json"
   ],
-  "updatedAt": "2026-11-23T00:00:02.209Z"
+  "updatedAt": "2026-11-23T00:01:20.531Z"
 }

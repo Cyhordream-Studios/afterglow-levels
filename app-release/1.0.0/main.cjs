@@ -337,8 +337,28 @@ function compareVersions(a, b) {
   return 0;
 }
 
+function portableRootDir() {
+  // electron-builder portable: persistent folder next to the .exe
+  if (process.env.PORTABLE_EXECUTABLE_DIR) return process.env.PORTABLE_EXECUTABLE_DIR;
+  try {
+    return path.dirname(process.execPath);
+  } catch (_) {
+    return app.getPath('userData');
+  }
+}
+
 function pendingUpdateDir() {
-  return path.join(app.getPath('userData'), 'pending-app-update');
+  // Prefer next to portable EXE so updates survive temp re-extracts.
+  const root = portableRootDir();
+  return path.join(root, '.afterglow-update');
+}
+
+function appInstallDir() {
+  try {
+    const appPath = app.getAppPath();
+    if (appPath && !String(appPath).includes('app.asar')) return appPath;
+  } catch (_) {}
+  return __dirname;
 }
 
 async function readAppUpdateManifest() {
@@ -406,27 +426,31 @@ async function applyPendingAppUpdate() {
   const dir = pendingUpdateDir();
   const metaPath = path.join(dir, 'update-meta.json');
   if (!fssync.existsSync(metaPath)) return { applied: false };
-  // Unpacked/portable with asar:false → files live next to main. asar builds cannot patch in-place.
-  let targetDir = __dirname;
-  try {
-    if (typeof app.getAppPath === 'function') {
-      const appPath = app.getAppPath();
-      if (appPath && !String(appPath).includes('app.asar')) targetDir = appPath;
-    }
-  } catch (_) {}
-
   const meta = JSON.parse(await fs.readFile(metaPath, 'utf8'));
   const files = Array.isArray(meta.files) ? meta.files : APP_UPDATE_FILES;
+  const targetDir = appInstallDir();
+  let copied = 0;
+  const errors = [];
   for (const name of files) {
     const base = path.basename(String(name));
     if (!APP_UPDATE_FILES.includes(base)) continue;
     const src = path.join(dir, base);
     if (!fssync.existsSync(src)) continue;
     const dest = path.join(targetDir, base);
-    await fs.copyFile(src, dest);
+    try {
+      await fs.copyFile(src, dest);
+      copied++;
+    } catch (error) {
+      errors.push(`${base}: ${error.message}`);
+    }
   }
-  await fs.rm(dir, { recursive: true, force: true });
-  return { applied: true, version: meta.version || '' };
+  // Keep the pending folder for portable builds that re-extract on every launch.
+  // Only delete after a successful copy when NOT portable (dev/unpacked persistent path).
+  const isPortable = Boolean(process.env.PORTABLE_EXECUTABLE_DIR);
+  if (copied && !isPortable) {
+    try { await fs.rm(dir, { recursive: true, force: true }); } catch (_) {}
+  }
+  return { applied: copied > 0, version: meta.version || '', copied, targetDir, errors, portable: isPortable };
 }
 
 async function normalizeAppVersion(value) {
@@ -552,7 +576,26 @@ function registerIpc() {
     return { saved: true };
   });
   ipcMain.handle('afterglow:check-app-update', async () => readAppUpdateManifest());
-  ipcMain.handle('afterglow:download-app-update', async () => downloadAppUpdate());
+  ipcMain.handle('afterglow:download-app-update', async () => {
+    const result = await downloadAppUpdate();
+    if (result.downloaded) {
+      const applied = await applyPendingAppUpdate();
+      result.applied = applied.applied;
+      result.copied = applied.copied;
+      result.targetDir = applied.targetDir;
+      result.applyErrors = applied.errors || [];
+      result.portable = applied.portable;
+      // Relaunch so renderer loads new app.js immediately.
+      if (applied.applied) {
+        setTimeout(() => {
+          app.relaunch();
+          app.exit(0);
+        }, 600);
+      }
+    }
+    return result;
+  });
+  ipcMain.handle('afterglow:apply-app-update', async () => applyPendingAppUpdate());
   ipcMain.handle('afterglow:publish-app-update', async (event, payload = {}) => {
     if (senderMode(event) !== 'developer') throw new Error('Nur der Developer-Modus kann App-Updates veröffentlichen.');
     return publishAppUpdate(payload.deviceKey, payload.notes, payload.version);
@@ -592,7 +635,11 @@ function createWindow(mode) {
 app.whenReady().then(async () => {
   try {
     const applied = await applyPendingAppUpdate();
-    if (applied.applied) console.log('[afterglow] applied pending app update', applied.version);
+    if (applied.applied) {
+      console.log('[afterglow] applied app update', applied.version, '→', applied.targetDir, 'files', applied.copied);
+    } else if (applied.errors?.length) {
+      console.error('[afterglow] app update partial failures', applied.errors);
+    }
   } catch (error) {
     console.error('[afterglow] pending app update failed', error);
   }

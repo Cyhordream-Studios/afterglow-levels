@@ -1583,11 +1583,20 @@
     try{
       const result=await window.afterglowDesktop.downloadAppUpdate();
       if(result.downloaded){
-        setAppStatus(tr(
-          `v${result.remoteVersion} geladen. Bitte Spiel komplett schließen und neu starten.`,
-          `v${result.remoteVersion} downloaded. Fully quit the game and restart.`
-        ));
-        toast(tr('Spiel-Update bereit — App neu starten.','App update ready — restart the app.'));
+        if(result.applied){
+          setAppStatus(tr(
+            `v${result.remoteVersion} installiert (${result.copied||0} Dateien). App startet neu…`,
+            `v${result.remoteVersion} installed (${result.copied||0} files). Relaunching…`
+          ));
+          toast(tr('Spiel-Update installiert — Neustart…','App update installed — restarting…'));
+        }else{
+          const err=(result.applyErrors&&result.applyErrors[0])||'';
+          setAppStatus(tr(
+            `Download ok, Install unvollständig. ${err} Ordner: ${result.targetDir||'?'}`,
+            `Download ok, install incomplete. ${err} Folder: ${result.targetDir||'?'}`
+          ));
+          toast(tr('Update geladen, aber Dateien konnten nicht ersetzt werden.','Update downloaded but files could not be replaced.'));
+        }
       }else{
         setAppStatus(tr('Bereits aktuell.','Already up to date.'));
       }
