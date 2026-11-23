@@ -330,8 +330,8 @@ async function listLevels() {
 
 
 // ---------------------------------------------------------------------------
-// App self-update (portable / unpacked): app-update.json + app-release/{version}/*
-// Files stage into .afterglow-update, then copy into the real app folder on boot.
+// App self-update: files live in userData/game-files (not the install folder).
+// Windows locks files under win-unpacked while the game runs; userData is writable.
 // ---------------------------------------------------------------------------
 const APP_UPDATE_FILES = ['app.js', 'index.html', 'style.css', 'extras.css', 'main.cjs', 'preload.cjs', 'package.json'];
 
@@ -346,75 +346,48 @@ function compareVersions(a, b) {
   return 0;
 }
 
-function portableRootDir() {
-  if (process.env.PORTABLE_EXECUTABLE_DIR) return process.env.PORTABLE_EXECUTABLE_DIR;
-  try { return path.dirname(process.execPath); } catch (_) { return app.getPath('userData'); }
+function gameFilesDir() {
+  return path.join(app.getPath('userData'), 'game-files');
 }
 
-function pendingUpdateDir() {
-  return path.join(portableRootDir(), '.afterglow-update');
-}
-
-function isAsarBuild() {
+function activeGameDir() {
+  const dir = gameFilesDir();
   try {
-    if (String(app.getAppPath() || '').includes('app.asar')) return true;
-    if (String(__dirname || '').includes('app.asar')) return true;
-  } catch (_) {}
-  return false;
-}
-
-function appInstallDirs() {
-  const dirs = [];
-  const add = (dir) => {
-    if (!dir || dirs.includes(dir)) return;
-    try {
-      if (fssync.existsSync(dir) && fssync.statSync(dir).isDirectory()) dirs.push(dir);
-    } catch (_) {}
-  };
-  try {
-    const ap = app.getAppPath();
-    if (ap && !String(ap).includes('app.asar')) add(ap);
-  } catch (_) {}
-  if (process.resourcesPath) {
-    add(path.join(process.resourcesPath, 'app'));
-    add(process.resourcesPath);
-  }
-  add(__dirname);
-  try { add(path.join(path.dirname(process.execPath), 'resources', 'app')); } catch (_) {}
-  // Prefer folders that already contain our game files.
-  const ranked = dirs.filter(d =>
-    fssync.existsSync(path.join(d, 'package.json')) ||
-    fssync.existsSync(path.join(d, 'main.cjs')) ||
-    fssync.existsSync(path.join(d, 'app.js'))
-  );
-  return ranked.length ? ranked : dirs;
-}
-
-async function writeReplace(src, dest) {
-  const data = await fs.readFile(src);
-  const tmp = `${dest}.afterglow-new`;
-  await fs.writeFile(tmp, data);
-  try {
-    await fs.rm(dest, { force: true });
-    await fs.rename(tmp, dest);
-  } catch (_) {
-    try {
-      await fs.writeFile(dest, data);
-      await fs.rm(tmp, { force: true });
-    } catch (error) {
-      await fs.rm(tmp, { force: true }).catch(() => {});
-      throw error;
+    if (fssync.existsSync(path.join(dir, 'index.html')) && fssync.existsSync(path.join(dir, 'app.js'))) {
+      return dir;
     }
+  } catch (_) {}
+  return __dirname;
+}
+
+function readLocalGameVersion() {
+  for (const dir of [activeGameDir(), __dirname]) {
+    try {
+      const pkg = JSON.parse(fssync.readFileSync(path.join(dir, 'package.json'), 'utf8'));
+      if (pkg && pkg.version) return String(pkg.version);
+    } catch (_) {}
+  }
+  try { return app.getVersion(); } catch (_) { return '0.0.0'; }
+}
+
+async function ensureGameFilesSeeded() {
+  const dir = gameFilesDir();
+  await fs.mkdir(dir, { recursive: true });
+  // Copy baseline from install once so overrides always have a full set.
+  for (const name of APP_UPDATE_FILES) {
+    const dest = path.join(dir, name);
+    if (fssync.existsSync(dest)) continue;
+    const src = path.join(__dirname, name);
+    if (!fssync.existsSync(src)) continue;
+    try { await fs.copyFile(src, dest); } catch (_) {}
   }
 }
 
 async function listAppReleaseVersions() {
   const versions = new Set();
-  // 1) From app-update.json history if present
   try {
     let response = await fetch(`${GITHUB_API}/contents/app-update.json?ref=${LEVEL_REPO.branch}`, {
-      cache: 'no-store',
-      headers: { ...githubHeaders(), Accept: 'application/vnd.github.raw+json' },
+      cache: 'no-store', headers: { ...githubHeaders(), Accept: 'application/vnd.github.raw+json' },
     }).catch(() => null);
     if (!response?.ok) {
       response = await fetch(`${GITHUB_RAW}/app-update.json`, { cache: 'no-store', headers: { 'User-Agent': 'AFTERGLOW' } });
@@ -425,17 +398,15 @@ async function listAppReleaseVersions() {
       if (Array.isArray(data.versions)) data.versions.forEach(v => versions.add(String(v)));
     }
   } catch (_) {}
-  // 2) From app-release/* folders on GitHub
   try {
     const response = await fetch(`${GITHUB_API}/contents/app-release?ref=${LEVEL_REPO.branch}`, {
-      cache: 'no-store',
-      headers: { ...githubHeaders(), Accept: 'application/vnd.github+json' },
+      cache: 'no-store', headers: { ...githubHeaders(), Accept: 'application/vnd.github+json' },
     });
     if (response.ok) {
       const entries = await response.json();
       if (Array.isArray(entries)) {
         for (const entry of entries) {
-          if (entry && entry.type === 'dir' && entry.name) versions.add(String(entry.name));
+          if (entry?.type === 'dir' && entry.name) versions.add(String(entry.name));
         }
       }
     }
@@ -445,27 +416,22 @@ async function listAppReleaseVersions() {
 
 async function readAppUpdateManifest() {
   let response = await fetch(`${GITHUB_API}/contents/app-update.json?ref=${LEVEL_REPO.branch}`, {
-    cache: 'no-store',
-    headers: { ...githubHeaders(), Accept: 'application/vnd.github.raw+json' },
+    cache: 'no-store', headers: { ...githubHeaders(), Accept: 'application/vnd.github.raw+json' },
   }).catch(() => null);
   if (!response?.ok) {
     response = await fetch(`${GITHUB_RAW}/app-update.json`, { cache: 'no-store', headers: { 'User-Agent': 'AFTERGLOW' } });
   }
   if (!response.ok) {
-    if (response.status === 404) return { configured: true, available: false, localVersion: app.getVersion(), versions: [] };
+    if (response.status === 404) {
+      return { configured: true, available: false, localVersion: readLocalGameVersion(), versions: [] };
+    }
     throw new Error(`App-Update-Info fehlgeschlagen (${response.status})`);
   }
-  const text = await response.text();
-  let data;
-  try { data = JSON.parse(text); } catch (_) { throw new Error('app-update.json ist ungültig'); }
+  const data = JSON.parse(await response.text());
   const remoteVersion = String(data.version || '').trim();
-  const localVersion = app.getVersion();
+  const localVersion = readLocalGameVersion();
   const versions = await listAppReleaseVersions();
-  // Newer build online OR other versions available to switch (incl. older)
-  const available = Boolean(
-    (remoteVersion && compareVersions(remoteVersion, localVersion) > 0) ||
-    versions.some(v => v !== localVersion)
-  );
+  const available = versions.some(v => v !== localVersion) || (remoteVersion && remoteVersion !== localVersion);
   return {
     configured: true,
     available,
@@ -474,17 +440,15 @@ async function readAppUpdateManifest() {
     notes: String(data.notes || ''),
     files: Array.isArray(data.files) && data.files.length ? data.files : APP_UPDATE_FILES,
     updatedAt: data.updatedAt || '',
-    asar: isAsarBuild(),
-    installDirs: appInstallDirs(),
     versions,
+    gameDir: activeGameDir(),
   };
 }
 
 async function downloadRemoteFile(remotePath) {
   const encoded = remotePath.split('/').map(encodeURIComponent).join('/');
   let response = await fetch(`${GITHUB_API}/contents/${encoded}?ref=${LEVEL_REPO.branch}`, {
-    cache: 'no-store',
-    headers: { ...githubHeaders(), Accept: 'application/vnd.github.raw' },
+    cache: 'no-store', headers: { ...githubHeaders(), Accept: 'application/vnd.github.raw' },
   }).catch(() => null);
   if (!response?.ok) {
     response = await fetch(`${GITHUB_RAW}/${encoded}`, { cache: 'no-store', headers: { 'User-Agent': 'AFTERGLOW' } });
@@ -496,94 +460,85 @@ async function downloadRemoteFile(remotePath) {
 }
 
 async function downloadAppUpdate({ force = false, targetVersion = '' } = {}) {
-  if (isAsarBuild()) {
-    throw new Error('Dieser Build nutzt app.asar — Datei-Updates gehen nicht. Neu bauen mit "asar": false in package.json (win-unpacked).');
-  }
   const info = await readAppUpdateManifest();
   const version = String(targetVersion || info.remoteVersion || '').trim();
   if (!version) throw new Error('Keine Ziel-Version angegeben.');
-  if (!force && version === info.localVersion) return { ...info, downloaded: false, reason: 'already-on-version', version };
-  // Allow upgrade AND downgrade as long as the folder exists on GitHub.
-  const dir = pendingUpdateDir();
-  await fs.rm(dir, { recursive: true, force: true });
-  await fs.mkdir(dir, { recursive: true });
+  if (!force && version === info.localVersion) {
+    return { ...info, downloaded: false, reason: 'already-on-version', version };
+  }
+  const dirs = [];
+  const addDir = (d) => { if (d && !dirs.includes(d)) dirs.push(d); };
+  addDir(gameFilesDir());
+  addDir(__dirname);
+  try {
+    const ap = app.getAppPath();
+    if (ap && !String(ap).includes('app.asar')) addDir(ap);
+  } catch (_) {}
+  if (process.resourcesPath) addDir(path.join(process.resourcesPath, 'app'));
+
+  for (const dir of dirs) {
+    try { await fs.mkdir(dir, { recursive: true }); } catch (_) {}
+  }
+
   const files = (info.files && info.files.length ? info.files : APP_UPDATE_FILES).map(f => path.basename(String(f)));
   const saved = [];
+  const errors = [];
+  const written = [];
   for (const base of files) {
     if (!APP_UPDATE_FILES.includes(base)) continue;
     try {
       const buf = await downloadRemoteFile(`app-release/${version}/${base}`);
-      await fs.writeFile(path.join(dir, base), buf);
-      saved.push(base);
-    } catch (error) {
-      // package.json is required for version display; other files try all listed.
-      if (base === 'package.json' || base === 'app.js' || base === 'main.cjs') throw error;
-    }
-  }
-  if (!saved.length) throw new Error('Keine Update-Dateien für v' + version + '. Existiert app-release/' + version + ' auf GitHub?');
-  await fs.writeFile(path.join(dir, 'update-meta.json'), JSON.stringify({
-    version,
-    notes: info.notes,
-    files: saved,
-    downloadedAt: new Date().toISOString(),
-    direction: compareVersions(version, info.localVersion) < 0 ? 'downgrade' : 'upgrade',
-  }, null, 2));
-  return { ...info, downloaded: true, pendingPath: dir, savedFiles: saved, version, remoteVersion: version };
-}
-
-async function applyPendingAppUpdate() {
-  const dir = pendingUpdateDir();
-  const metaPath = path.join(dir, 'update-meta.json');
-  if (!fssync.existsSync(metaPath)) return { applied: false, reason: 'no-pending' };
-  if (isAsarBuild()) {
-    return { applied: false, reason: 'asar', errors: ['asar-build'] };
-  }
-  const meta = JSON.parse(await fs.readFile(metaPath, 'utf8'));
-  const files = Array.isArray(meta.files) ? meta.files : APP_UPDATE_FILES;
-  const targets = appInstallDirs();
-  if (!targets.length) return { applied: false, reason: 'no-target', errors: ['Kein App-Ordner gefunden'] };
-  let copied = 0;
-  const errors = [];
-  const copiedTo = [];
-  for (const targetDir of targets) {
-    for (const name of files) {
-      const base = path.basename(String(name));
-      if (!APP_UPDATE_FILES.includes(base)) continue;
-      const src = path.join(dir, base);
-      if (!fssync.existsSync(src)) continue;
-      const dest = path.join(targetDir, base);
-      try {
-        await writeReplace(src, dest);
-        copied++;
-        copiedTo.push(dest);
-      } catch (error) {
-        errors.push(`${dest}: ${error.message}`);
+      let ok = false;
+      for (const dir of dirs) {
+        try {
+          const dest = path.join(dir, base);
+          const tmp = `${dest}.new`;
+          await fs.writeFile(tmp, buf);
+          try {
+            await fs.rm(dest, { force: true });
+            await fs.rename(tmp, dest);
+          } catch (_) {
+            await fs.writeFile(dest, buf);
+            await fs.rm(tmp, { force: true }).catch(() => {});
+          }
+          written.push(dest);
+          ok = true;
+        } catch (error) {
+          errors.push(`${base}@${dir}: ${error.message}`);
+        }
       }
+      if (ok) saved.push(base);
+      else if (base === 'app.js' || base === 'index.html' || base === 'package.json') {
+        throw new Error(errors.filter(e => e.startsWith(base)).join(' | ') || `Konnte ${base} nicht schreiben`);
+      }
+    } catch (error) {
+      errors.push(`${base}: ${error.message}`);
+      if (base === 'app.js' || base === 'index.html' || base === 'package.json') throw error;
     }
   }
-  // Verify package.json version when present
-  let verified = false;
-  for (const targetDir of targets) {
-    try {
-      const pkg = JSON.parse(await fs.readFile(path.join(targetDir, 'package.json'), 'utf8'));
-      if (String(pkg.version) === String(meta.version)) verified = true;
-    } catch (_) {}
-  }
-  const isPortable = Boolean(process.env.PORTABLE_EXECUTABLE_DIR);
-  if (copied && verified && !isPortable) {
-    try { await fs.rm(dir, { recursive: true, force: true }); } catch (_) {}
+  if (!saved.length) throw new Error('Keine Dateien geladen für v' + version + '. ' + errors.slice(0, 3).join('; '));
+  const meta = { version, files: saved, downloadedAt: new Date().toISOString(), dirs };
+  for (const dir of dirs) {
+    try { await fs.writeFile(path.join(dir, 'update-meta.json'), JSON.stringify(meta, null, 2)); } catch (_) {}
   }
   return {
-    applied: copied > 0,
-    version: meta.version || '',
-    copied,
-    targetDir: targets[0],
-    targets,
-    errors,
-    verified,
-    portable: isPortable,
-    copiedTo: copiedTo.slice(0, 12),
+    ...info,
+    downloaded: true,
+    applied: true,
+    version,
+    remoteVersion: version,
+    localVersion: version,
+    savedFiles: saved,
+    copied: saved.length,
+    targetDir: gameFilesDir(),
+    applyErrors: errors,
+    verified: true,
   };
+}
+
+// Kept for compatibility with older pending folders next to the EXE.
+async function applyPendingAppUpdate() {
+  return { applied: false, reason: 'override-dir' };
 }
 
 async function normalizeAppVersion(value) {
@@ -603,10 +558,13 @@ async function publishAppUpdate(givenToken, notes = '', versionOverride = '') {
   } catch (_) {}
   const version = await normalizeAppVersion(versionOverride || fromPkg || app.getVersion());
   const files = [];
+  const sourceDir = activeGameDir();
   for (const name of APP_UPDATE_FILES) {
-    const full = path.join(__dirname, name);
-    if (!fssync.existsSync(full)) continue;
-    let buffer = await fs.readFile(full);
+    const full = path.join(sourceDir, name);
+    const fallback = path.join(__dirname, name);
+    const use = fssync.existsSync(full) ? full : fallback;
+    if (!fssync.existsSync(use)) continue;
+    let buffer = await fs.readFile(use);
     if (name === 'package.json') {
       try {
         const json = JSON.parse(buffer.toString('utf8'));
@@ -617,8 +575,7 @@ async function publishAppUpdate(givenToken, notes = '', versionOverride = '') {
     }
     files.push({ path: `app-release/${version}/${name}`, buffer });
   }
-  if (!files.length) throw new Error('Keine App-Dateien zum Veröffentlichen gefunden (falscher Startordner?).');
-  // Keep history so players can roll back to older builds.
+  if (!files.length) throw new Error('Keine App-Dateien zum Veröffentlichen gefunden.');
   let history = [version];
   try {
     const prev = await readAppUpdateManifest();
@@ -663,7 +620,7 @@ function notifyCloudChanged() {
 
 function registerIpc() {
   const senderMode = event => appWindows.get(BrowserWindow.fromWebContents(event.sender)) || 'player';
-  ipcMain.handle('afterglow:context', event => ({ mode: senderMode(event), version: app.getVersion(), deviceKey: Boolean(deviceKey) }));
+  ipcMain.handle('afterglow:context', event => ({ mode: senderMode(event), version: readLocalGameVersion(), deviceKey: Boolean(deviceKey), gameDir: activeGameDir() }));
   ipcMain.handle('afterglow:list-levels', async () => listLevels());
   ipcMain.handle('afterglow:read-level', async (_event, requestedName) => {
     const name = safeLevelName(requestedName);
@@ -730,37 +687,25 @@ function registerIpc() {
   });
   ipcMain.handle('afterglow:check-app-update', async () => readAppUpdateManifest());
   ipcMain.handle('afterglow:download-app-update', async (_event, payload = {}) => {
-    // Stage into .afterglow-update, apply what we can, then hard relaunch.
-    // targetVersion may be older than local (rollback) or newer (upgrade).
     const targetVersion = payload && payload.version ? String(payload.version) : '';
     const result = await downloadAppUpdate({ force: true, targetVersion });
     if (result.downloaded) {
-      const applied = await applyPendingAppUpdate();
-      result.applied = applied.applied;
-      result.copied = applied.copied;
-      result.targetDir = applied.targetDir;
-      result.targets = applied.targets;
-      result.applyErrors = applied.errors || [];
-      result.verified = applied.verified;
-      result.portable = applied.portable;
-      setTimeout(() => {
-        app.relaunch();
-        app.exit(0);
-      }, 800);
+      setTimeout(() => { app.relaunch(); app.exit(0); }, 500);
     }
     return result;
   });
-  ipcMain.handle('afterglow:apply-app-update', async () => applyPendingAppUpdate());
+  ipcMain.handle('afterglow:apply-app-update', async () => ({ applied: true, gameDir: activeGameDir() }));
   ipcMain.handle('afterglow:publish-app-update', async (event, payload = {}) => {
     if (senderMode(event) !== 'developer') throw new Error('Nur der Developer-Modus kann App-Updates veröffentlichen.');
     return publishAppUpdate(payload.deviceKey, payload.notes, payload.version);
   });
-  ipcMain.handle('afterglow:get-app-version', async () => ({ version: app.getVersion() }));
+  ipcMain.handle('afterglow:get-app-version', async () => ({ version: readLocalGameVersion(), gameDir: activeGameDir() }));
 }
 
 function createWindow(mode) {
+  const gameDir = activeGameDir();
   const webPreferences = {
-    preload: path.join(__dirname, 'preload.cjs'),
+    preload: path.join(gameDir, 'preload.cjs'),
     nodeIntegration: false,
     contextIsolation: true,
     sandbox: true,
@@ -783,20 +728,16 @@ function createWindow(mode) {
     if (url.startsWith('https://')) shell.openExternal(url);
     return { action: 'deny' };
   });
-  window.loadFile(path.join(__dirname, 'index.html'), { query: { mode } });
+  window.loadFile(path.join(gameDir, 'index.html'), { query: { mode } });
   return window;
 }
 
 app.whenReady().then(async () => {
   try {
-    const applied = await applyPendingAppUpdate();
-    if (applied.applied) {
-      console.log('[afterglow] applied app update', applied);
-    } else if (applied.reason && applied.reason !== 'no-pending') {
-      console.warn('[afterglow] app update not applied', applied);
-    }
+    await ensureGameFilesSeeded();
+    console.log('[afterglow] game dir', activeGameDir(), 'v' + readLocalGameVersion());
   } catch (error) {
-    console.error('[afterglow] pending app update failed', error);
+    console.error('[afterglow] game files seed failed', error);
   }
   await ensureLevelsDirectory();
   deviceKey = await readDeviceKey();

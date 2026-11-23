@@ -252,3 +252,9 @@ body.no-post #game-overlay .game-stage:after{opacity:.08!important}
 .run-grade.grade-C{color:#c5d0e0;border-color:#c5d0e044}
 .run-grade.grade-F{color:#ff6b8a;border-color:#ff6b8a55}
 body.in-game .game-stage{box-shadow:inset 0 0 120px #050814aa}
+
+#cloud-updates-card .settings-title b{display:inline-flex;align-items:center;gap:8px}
+#cloud-updates-card .update-dot{width:8px;height:8px;min-width:8px;margin:0}
+
+button.language-switch{display:inline-flex;align-items:center;gap:8px;padding:6px 10px;border-radius:10px;border:1px solid #2a3358;background:#121526;color:#c8d0f0;cursor:pointer;font:inherit}
+button.language-switch b{color:#fff;min-width:1.5em}

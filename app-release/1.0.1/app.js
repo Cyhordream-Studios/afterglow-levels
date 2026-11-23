@@ -378,7 +378,7 @@
     if(root.nodeType===Node.TEXT_NODE)translateNode(root);
     else if(root.nodeType===Node.ELEMENT_NODE||root.nodeType===Node.DOCUMENT_NODE){const walker=document.createTreeWalker(root,NodeFilter.SHOW_TEXT);while(walker.nextNode())translateNode(walker.currentNode);const elements=root.nodeType===Node.ELEMENT_NODE?[root,...root.querySelectorAll('*')]:[...root.querySelectorAll('*')];for(const element of elements)for(const attrName of ['placeholder','title','aria-label']){const value=element.getAttribute(attrName);if(value&&!alreadyTarget.has(value)&&map.has(value))element.setAttribute(attrName,map.get(value));}}
   }
-  function applyLanguage(){document.documentElement.lang=state.language;if($('language-select'))$('language-select').value=state.language;translateTree(document.body);}
+  function applyLanguage(){document.documentElement.lang=state.language;const sel=$('language-select');if(sel)sel.value=state.language==='en'?'en':'de';translateTree(document.body);}
   $('language-select')?.addEventListener('change',e=>{state.language=e.target.value==='en'?'en':'de';persist();applyLanguage();renderAll();});
   const languageObserver=new MutationObserver(records=>records.forEach(record=>record.addedNodes.forEach(node=>{if(node.nodeType===Node.TEXT_NODE||node.nodeType===Node.ELEMENT_NODE)translateTree(node);})));languageObserver.observe(document.body,{childList:true,subtree:true});
 
@@ -1210,7 +1210,7 @@
   function startGameAudio(resumeAt=0){if(!game||!audioElement||game.status!=='playing')return;const attempt=++game.audioAttempt;game.audioPending=true;game.audioPendingTime=Math.max(0,resumeAt);game.musicStarted=false;audioElement.volume=state.volume/100;try{audioElement.currentTime=Math.max(0,resumeAt);}catch(_){}audioElement.onended=()=>{if(game&&game.status==='playing')endGame();};audioElement.play().then(()=>{if(!game||game.audioAttempt!==attempt||game.status!=='playing')return;game.audioPending=false;game.musicStarted=true;game.audioStartedOnce=true;game.audioClock={mediaTime:audioElement.currentTime,perfTime:performance.now()};}).catch(()=>{if(!game||game.audioAttempt!==attempt)return;game.audioPending=false;toast(tr('Drücke eine Lane, um den Browser-Audiozugriff zu erlauben.','Press a lane to allow audio playback.'));});}
   function getAudioContext(){if(!audioContext){const AudioCtx=window.AudioContext||window.webkitAudioContext;if(AudioCtx)audioContext=new AudioCtx();}if(audioContext?.state==='suspended')audioContext.resume().catch(()=>{});return audioContext;}
   function scheduleMenuChord(){if(!menuMusicGain||!audioContext||audioContext.state!=='running')return;const roots=[130.81,110,146.83,123.47],intervals=[0,3,7,12,19],root=roots[menuMusicIndex%roots.length],now=audioContext.currentTime+.04;menuMusicIndex++;for(let i=0;i<intervals.length;i++){const osc=audioContext.createOscillator(),gain=audioContext.createGain();osc.type=i<3?'sine':'triangle';osc.frequency.setValueAtTime(root*2**(intervals[i]/12),now);gain.gain.setValueAtTime(.0001,now);gain.gain.linearRampToValueAtTime(i===0?.14:.06,now+.35);gain.gain.setValueAtTime(i===0?.14:.06,now+2.5);gain.gain.exponentialRampToValueAtTime(.0001,now+3.8);osc.connect(gain).connect(menuMusicGain);osc.start(now);osc.stop(now+3.85);}}
-  function startMenuMusic(){if(appMode==='developer'||game||gameStarting||state.volume<=0)return;const ctx=getAudioContext();if(!ctx)return;if(ctx.state!=='running'){ctx.resume().then(()=>{if(appMode==='player'&&!game&&!gameStarting)startMenuMusic();}).catch(()=>{});return;}if(menuMusicGain)return;menuMusicGain=ctx.createGain();menuMusicGain.gain.setValueAtTime(.08*(state.volume/100),ctx.currentTime);menuMusicGain.connect(ctx.destination);scheduleMenuChord();menuMusicTimer=setInterval(scheduleMenuChord,3600);}
+  function startMenuMusic(){/* Menü-Musik deaktiviert */ return;}
   function stopMenuMusic(){if(!menuMusicGain)return;clearInterval(menuMusicTimer);const gain=menuMusicGain;menuMusicGain=null;try{gain.gain.setTargetAtTime(.0001,audioContext.currentTime,.12);setTimeout(()=>gain.disconnect(),700);}catch(_){}}
   function tone(freq,duration,type='sine',volume=.05,when){const ctx=getAudioContext();if(!ctx)return;const osc=ctx.createOscillator();const gain=ctx.createGain();osc.type=type;osc.frequency.setValueAtTime(freq,when||ctx.currentTime);gain.gain.setValueAtTime(Math.max(.0001,volume*(state.volume/80)),when||ctx.currentTime);gain.gain.exponentialRampToValueAtTime(.001,(when||ctx.currentTime)+duration);osc.connect(gain).connect(ctx.destination);osc.start(when||ctx.currentTime);osc.stop((when||ctx.currentTime)+duration+.01);}
   function kick(when,strength=1){const ctx=getAudioContext();if(!ctx)return;const osc=ctx.createOscillator();const gain=ctx.createGain();osc.type='sine';osc.frequency.setValueAtTime(120,when);osc.frequency.exponentialRampToValueAtTime(42,when+.13);gain.gain.setValueAtTime(Math.max(.0001,.32*strength*(state.volume/80)),when);gain.gain.exponentialRampToValueAtTime(.001,when+.17);osc.connect(gain).connect(ctx.destination);osc.start(when);osc.stop(when+.19);}
@@ -1366,7 +1366,7 @@
   async function boot() {
     const desktop=window.afterglowDesktop;
     if(desktop){try{const context=await desktop.getContext();appMode=context.mode==='developer'?'developer':'player';contentVersion=context.version||contentVersion;if(appMode==='developer'){const catalog=await desktop.listLevels();contentVersion=String(catalog.version||contentVersion);}}catch(_){appMode='player';}}
-    $('language-select').value=state.language;setGraphic(state.graphic);applyAppMode();renderAll();
+    const __langSel=$('language-select');if(__langSel)__langSel.value=state.language==='en'?'en':'de';setGraphic(state.graphic);applyAppMode();renderAll();
     state.songs.forEach(s=>{if(s.coverKey)songMedia(s,'cover').then(url=>{if(url){objectUrlCache.set(`${s.id}:cover`,url);renderSongs($('song-search').value);renderEditor();}});});
     refreshLegacyAutoMaps();applyLanguage();
     if(desktop){
@@ -1374,7 +1374,7 @@
       desktop.onLevelsChanged?.(()=>{if(!isGameplayActive())syncLevelsFromFolder({quiet:true});});
       await syncLevelsFromFolder({quiet:true});
       // Cloud: only a silent badge check — no auto download, no spam during play.
-      await checkAppUpdates({silent:true});
+      // No auto app-update check — was spamming "new update". Levels only, silent.
       await checkCloudUpdates({silent:true});
     }
     if(appMode==='developer'){
@@ -1384,10 +1384,10 @@
         desktop.getAppVersion().then(info=>{
           const v=String(info?.version||'').trim();
           if(v&&$('developer-version')){
-            // Prefer higher of contentVersion vs package version for the input.
             const cur=($('developer-version').value||'').trim();
-            if(!cur||cur==='1.0.0'||cur===contentVersion) $('developer-version').value=v;
-            if($('developer-status'))$('developer-status').textContent=`lokal v${v}`;
+            // Only prefill; never lock — user may retype freely.
+            if(!cur||cur==='1.0.0') $('developer-version').value=v;
+            if($('developer-status'))$('developer-status').textContent=`lokal v${v} (eingeben zum Ändern)`;
           }
         }).catch(()=>{});
       }
@@ -1411,14 +1411,13 @@
   let pendingCloudUpdates = [];
   let pendingAppUpdate = null;
   function refreshUpdateBadge(){
-    const on=Boolean((pendingCloudUpdates&&pendingCloudUpdates.length)||(pendingAppUpdate&&pendingAppUpdate.available));
+    // Red dot only for real pending cloud LEVELS — never for app version history.
+    const on=Boolean(pendingCloudUpdates&&pendingCloudUpdates.length);
     for(const id of ['settings-update-dot','cloud-card-dot']){
       const el=$(id);if(el)el.classList.toggle('hidden',!on);
     }
     const apply=$('cloud-apply-updates');
-    if(apply)apply.disabled=!pendingCloudUpdates.length;
-    const appBtn=$('app-download-update');
-    if(appBtn)appBtn.disabled=!(pendingAppUpdate&&pendingAppUpdate.available);
+    if(apply)apply.disabled=!on;
   }
   function setUpdateBadge(on){
     // legacy helper — prefer refreshUpdateBadge
@@ -1431,22 +1430,6 @@
   function setAppStatus(text){
     const el=$('app-update-status');if(el)el.textContent=text;
   }
-  function fillAppVersionSelect(info){
-    const sel=$('app-version-select');if(!sel)return;
-    const local=info?.localVersion||'';
-    const versions=[...(info?.versions||[])];
-    if(info?.remoteVersion&&!versions.includes(info.remoteVersion))versions.unshift(info.remoteVersion);
-    if(local&&!versions.includes(local))versions.unshift(local);
-    const uniq=[...new Set(versions.filter(Boolean))];
-    sel.innerHTML=uniq.length?uniq.map(v=>{
-      const tag=v===local?tr(' (aktuell)',' (current)'):compareVersionClient(v,local)<0?tr(' (älter)',' (older)'):tr(' (neuer)',' (newer)');
-      return `<option value="${attr(v)}" ${v===local?'selected':''}>v${escapeHtml(v)}${tag}</option>`;
-    }).join(''):`<option value="">${tr('Keine Versionen gefunden','No versions found')}</option>`;
-    const apply=$('app-download-update');
-    if(apply)apply.disabled=!uniq.some(v=>v&&v!==local)&&!uniq.length;
-    // Enable install whenever a different version exists or same (reinstall)
-    if(apply)apply.disabled=!uniq.length;
-  }
   function compareVersionClient(a,b){
     const pa=String(a||'0').replace(/^v/i,'').split(/[.+-]/).map(x=>parseInt(x,10)||0);
     const pb=String(b||'0').replace(/^v/i,'').split(/[.+-]/).map(x=>parseInt(x,10)||0);
@@ -1454,25 +1437,62 @@
     for(let i=0;i<n;i++){const d=(pa[i]||0)-(pb[i]||0);if(d)return d<0?-1:1;}
     return 0;
   }
+  async function fetchCloudAppManifest(){
+    try{
+      const r=await fetch('https://raw.githubusercontent.com/Cyhordream-Studios/afterglow-levels/main/app-update.json?ts='+Date.now(),{cache:'no-store'});
+      if(!r.ok)return null;
+      return await r.json();
+    }catch(_){return null;}
+  }
+  function fillAppVersionInput(info){
+    const input=$('app-version-input');
+    const hint=$('app-version-hint');
+    const local=String(info?.localVersion||'').trim();
+    const remote=String(info?.remoteVersion||'').trim();
+    const versions=[...new Set((info?.versions||[]).map(String))].filter(Boolean).sort((a,b)=>compareVersionClient(b,a));
+    // Never lock the field — only suggest if empty so typos can always be corrected.
+    if(input && !String(input.value||'').trim()){
+      input.value=remote||local||'';
+    }
+    if(hint){
+      const others=versions.filter(v=>v&&v!==local);
+      hint.textContent=tr(
+        `Installiert: v${local||'?'} · Online-Latest: v${remote||'?'} · Bekannt: ${versions.map(v=>'v'+v).join(', ')||'—'} (einfach neu eintippen)`,
+        `Installed: v${local||'?'} · Online latest: v${remote||'?'} · Known: ${versions.map(v=>'v'+v).join(', ')||'—'} (just type again)`
+      );
+    }
+    const apply=$('app-download-update');
+    if(apply)apply.disabled=false;
+  }
   async function checkAppUpdates({silent=false}={}){
     const desktop=window.afterglowDesktop;
-    if(!desktop?.checkAppUpdate){
-      if(!silent)setAppStatus(tr('Spiel-Update nicht verfügbar.','App update not available.'));
-      pendingAppUpdate=null;refreshUpdateBadge();return null;
-    }
     if(!silent)setAppStatus(tr('Prüfe Spiel-Version…','Checking app version…'));
     try{
-      const info=await desktop.checkAppUpdate();
-      pendingAppUpdate=info;
-      fillAppVersionSelect(info);
-      if(info.available){
-        setAppStatus(tr(
-          `Online: v${info.remoteVersion} · installiert: v${info.localVersion}${info.notes?': '+info.notes:''}`,
-          `Online: v${info.remoteVersion} · installed: v${info.localVersion}${info.notes?': '+info.notes:''}`
-        ));
-      }else{
-        setAppStatus(tr(`Spiel v${info.localVersion||'?'} · ${ (info.versions||[]).length } Version(en) online`,`App v${info.localVersion||'?'} · ${ (info.versions||[]).length } version(s) online`));
+      let info=null;
+      if(desktop?.checkAppUpdate){
+        try{info=await desktop.checkAppUpdate();}catch(_){info=null;}
       }
+      // Always merge public manifest so older versions (1.0.0) show even if main is outdated.
+      const cloud=await fetchCloudAppManifest();
+      if(!info)info={localVersion:'?',remoteVersion:'',versions:[],available:false};
+      if(cloud){
+        const merged=new Set([...(info.versions||[]),...(cloud.versions||[]),cloud.version,info.remoteVersion].filter(Boolean).map(String));
+        info.versions=[...merged];
+        if(cloud.version)info.remoteVersion=String(cloud.version);
+        if(cloud.notes)info.notes=cloud.notes;
+      }
+      if(!info.localVersion||info.localVersion==='?'){
+        try{info.localVersion=(await desktop?.getAppVersion?.())?.version||info.localVersion;}catch(_){ }
+      }
+      const local=String(info.localVersion||'').trim();
+      info.available=Boolean((info.versions||[]).some(v=>String(v)!==local)||(info.remoteVersion&&String(info.remoteVersion)!==local));
+      pendingAppUpdate=info;
+      fillAppVersionInput(info);
+      const other=(info.versions||[]).filter(v=>String(v)!==local);
+      setAppStatus(tr(
+        `Online: v${info.remoteVersion||'?'} · installiert: v${local||'?'} · ${other.length} andere Version(en)`,
+        `Online: v${info.remoteVersion||'?'} · installed: v${local||'?'} · ${other.length} other version(s)`
+      ));
       refreshUpdateBadge();
       return info;
     }catch(error){
@@ -1606,26 +1626,22 @@
   }
   $('developer-cloud-refresh')?.addEventListener('click',()=>renderDeveloperCloud());
   $('developer-change-token')?.addEventListener('click',()=>changeDeveloperKey());
-  $('developer-save-version').addEventListener('click',async()=>{if(appMode!=='developer'||!window.afterglowDesktop)return;try{const result=await window.afterglowDesktop.saveVersion($('developer-version').value);contentVersion=result.version;$('developer-version').value=contentVersion;$('developer-status').textContent=`v${contentVersion} lokal gespeichert`;toast(tr('Version lokal gespeichert. Für Spieler: APP-UPDATE VERÖFFENTLICHEN.','Version saved locally. For players: PUBLISH APP UPDATE.'));}catch(error){$('developer-status').textContent=error.message;toast(`${tr('Version ungültig:','Invalid version:')} ${error.message}`);}});
+  $('developer-save-version').addEventListener('click',async()=>{if(appMode!=='developer'||!window.afterglowDesktop)return;try{const typed=($('developer-version').value||'').replace(/^v/i,'').trim();const result=await window.afterglowDesktop.saveVersion(typed);contentVersion=result.version;$('developer-version').value=result.version;$('developer-status').textContent=`v${contentVersion} lokal — Feld bleibt editierbar`;toast(tr('Version lokal gespeichert. Du kannst sie jederzeit neu eintippen.','Version saved locally. You can type a different one anytime.'));}catch(error){$('developer-status').textContent=error.message;toast(`${tr('Version ungültig:','Invalid version:')} ${error.message}`);}});
   async function refreshLegacyAutoMaps(){for(const song of state.songs){if(song.mapSource!=='audio-analysis'||Number(song.mapVersion)>=5)continue;const audio=await mediaGet(song.audioKey).catch(()=>null);if(!audio)continue;const edited=Boolean(song.mapEdited),previous=song.difficulties;if(await autoMapSong(song,audio)){if(edited){const generated=song.difficulties;song.difficulties={...previous,'Expert+':generated['Expert+']};song.mapVersion=5;}persist();renderSongs($('song-search').value);renderEditor();}}}
   $('cloud-check-updates')?.addEventListener('click',async()=>{
     const btn=$('cloud-check-updates');if(btn)btn.disabled=true;
     try{
-      const appInfo=await checkAppUpdates({silent:false});
       const list=await checkCloudUpdates({silent:false});
-      const parts=[];
-      if(appInfo?.available)parts.push(tr(`Spiel v${appInfo.remoteVersion}`,`App v${appInfo.remoteVersion}`));
-      if(list.length)parts.push(tr(`${list.length} Level`,`${list.length} level(s)`));
-      if(parts.length)toast(tr(`Update gefunden: ${parts.join(' · ')}`,`Update found: ${parts.join(' · ')}`));
-      else toast(tr('Alles aktuell.','Everything up to date.'));
+      if(list.length)toast(tr(`${list.length} Level-Update(s) gefunden.`,`Found ${list.length} level update(s).`));
+      else toast(tr('Keine neuen Cloud-Level.','No new cloud levels.'));
     }finally{if(btn)btn.disabled=false;}
   });
   $('app-download-update')?.addEventListener('click',async()=>{
     if(!window.afterglowDesktop?.downloadAppUpdate){
       toast(tr('Kein Spiel-Update verfügbar.','No app update available.'));return;
     }
-    const selected=($('app-version-select')?.value||'').trim()||pendingAppUpdate?.remoteVersion||'';
-    if(!selected){toast(tr('Bitte eine Version wählen.','Please choose a version.'));return;}
+    const selected=($('app-version-input')?.value||'').trim()||pendingAppUpdate?.remoteVersion||'';
+    if(!selected){toast(tr('Bitte eine Version eintippen (z.B. 1.0.0).','Please type a version (e.g. 1.0.0).'));return;}
     const local=pendingAppUpdate?.localVersion||'';
     const isDown=local&&compareVersionClient(selected,local)<0;
     if(isDown&&!confirm(tr(`Zu älterer Version v${selected} zurück (jetzt v${local})?`,`Roll back to older v${selected} (now v${local})?`)))return;
@@ -1634,17 +1650,13 @@
     try{
       const result=await window.afterglowDesktop.downloadAppUpdate({version:selected});
       if(result.downloaded){
-        const err=(result.applyErrors&&result.applyErrors.slice(0,2).join(' | '))||'';
         setAppStatus(tr(
-          `v${result.remoteVersion||result.version}: ${result.copied||0} Dateien → ${result.targetDir||'?'} ${err?('· '+err):''}. Neustart…`,
-          `v${result.remoteVersion||result.version}: ${result.copied||0} files → ${result.targetDir||'?'} ${err?('· '+err):''}. Restarting…`
+          `v${result.remoteVersion||result.version} installiert (${result.copied||result.savedFiles?.length||0} Dateien). Neustart…`,
+          `v${result.remoteVersion||result.version} installed (${result.copied||result.savedFiles?.length||0} files). Restarting…`
         ));
-        toast(tr('Update geladen — App startet neu…','Update downloaded — app restarting…'));
-      }else if(result.asar){
-        setAppStatus(tr('Build mit app.asar erkannt. Bitte mit asar:false neu bauen (win-unpacked).','asar build detected. Rebuild with asar:false (win-unpacked).'));
-        toast(tr('asar-Build kann sich nicht selbst updaten.','asar build cannot self-update.'));
+        toast(tr('Update installiert — App startet neu…','Update installed — app restarting…'));
       }else{
-        setAppStatus(tr('Bereits aktuell.','Already up to date.'));
+        setAppStatus(tr('Bereits auf dieser Version.','Already on this version.'));
       }
       await checkAppUpdates({silent:true});
     }catch(error){
@@ -1663,11 +1675,13 @@
   $('app-publish-update-top')?.addEventListener('click',()=>$('app-publish-update')?.click());
   $('app-publish-update')?.addEventListener('click',async()=>{
     if(appMode!=='developer'||!window.afterglowDesktop?.publishAppUpdate)return;
+    // Always take whatever is currently typed — typos can be fixed and published again.
     let versionInput=($('developer-version')?.value||'').trim();
     if(!versionInput&&window.afterglowDesktop.getAppVersion){
       try{versionInput=(await window.afterglowDesktop.getAppVersion()).version||'';}catch(_){ }
     }
     if(!versionInput)versionInput=contentVersion||'1.0.0';
+    versionInput=versionInput.replace(/^v/i,'').trim();
     const notes=await askText(
       tr(`App-Update v${versionInput} — Notiz für Spieler (optional):`,`App update v${versionInput} — note for players (optional):`),
       ''
