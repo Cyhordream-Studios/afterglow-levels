@@ -17,6 +17,7 @@ contextBridge.exposeInMainWorld('afterglowDesktop', {
   downloadLevel: (packageId) => invoke('afterglow:download-level', packageId),
   deleteLevel: (packageId, key) => invoke('afterglow:delete-level', packageId, key),
   setDeveloperKey: (key) => invoke('afterglow:set-developer-key', key),
+  clearDeveloperKey: () => invoke('afterglow:clear-developer-key'),
   checkAppUpdate: () => invoke('afterglow:check-app-update'),
   downloadAppUpdate: (payload) => invoke('afterglow:download-app-update', payload || {}),
   publishAppUpdate: (payload) => invoke('afterglow:publish-app-update', payload),

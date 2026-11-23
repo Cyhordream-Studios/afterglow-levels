@@ -59,6 +59,10 @@ async function readDeviceKey() {
 
 async function saveDeviceKey(token) {
   const value = String(token || '').trim();
+  if (!value) {
+    await clearDeviceKey();
+    return;
+  }
   let payload;
   if (await encryptionAvailable()) {
     if (typeof safeStorage.encryptStringAsync === 'function') {
@@ -71,6 +75,11 @@ async function saveDeviceKey(token) {
   }
   await fs.writeFile(tokenFile(), payload);
   deviceKey = value;
+}
+
+async function clearDeviceKey() {
+  deviceKey = null;
+  try { await fs.rm(tokenFile(), { force: true }); } catch (_) {}
 }
 
 // The developer's GitHub token. Given once in the game, then kept encrypted on this PC only.
@@ -706,8 +715,18 @@ function registerIpc() {
   });
   ipcMain.handle('afterglow:set-developer-key', async (event, key) => {
     if (senderMode(event) !== 'developer') throw new Error('Nur der Developer-Modus kann den GitHub-Token ändern.');
-    await developerToken(key);
+    const value = String(key || '').trim();
+    if (!value) {
+      await clearDeviceKey();
+      return { saved: false, cleared: true };
+    }
+    await developerToken(value);
     return { saved: true };
+  });
+  ipcMain.handle('afterglow:clear-developer-key', async (event) => {
+    if (senderMode(event) !== 'developer') throw new Error('Nur der Developer-Modus kann den GitHub-Token löschen.');
+    await clearDeviceKey();
+    return { cleared: true };
   });
   ipcMain.handle('afterglow:check-app-update', async () => readAppUpdateManifest());
   ipcMain.handle('afterglow:download-app-update', async (_event, payload = {}) => {

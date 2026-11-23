@@ -258,12 +258,16 @@
         if (ctx?.deviceKey) return ''; // main process already has the encrypted token
       } catch (_) { /* fall through to prompt */ }
     }
-    key = await askText(tr('GitHub-Token eingeben (einmalig pro PC, wird gespeichert):','Enter the GitHub token (once per PC, will be saved):'), '', { password: true }) || '';
+    if (forcePrompt) await forgetDeveloperKey();
+    key = await askText(tr('GitHub-Token eingeben (Classic, repo-Rechte):','Enter GitHub token (classic, repo scope):'), '', { password: true }) || '';
     key = key.trim();
     if (!key) return '';
     localStorage.setItem('afterglow-developer-key', key);
     if (window.afterglowDesktop?.setDeveloperKey) {
-      try { await window.afterglowDesktop.setDeveloperKey(key); } catch (_) { /* publish path still validates */ }
+      try { await window.afterglowDesktop.setDeveloperKey(key); } catch (error) {
+        localStorage.removeItem('afterglow-developer-key');
+        throw error;
+      }
     }
     return key;
   }
@@ -275,8 +279,25 @@
       try { await window.afterglowDesktop.setDeveloperKey(value); } catch (_) { /* ignore */ }
     }
   }
-  function forgetDeveloperKey() {
+  async function forgetDeveloperKey() {
     localStorage.removeItem('afterglow-developer-key');
+    if (window.afterglowDesktop?.clearDeveloperKey) {
+      try { await window.afterglowDesktop.clearDeveloperKey(); } catch (_) {}
+    } else if (window.afterglowDesktop?.setDeveloperKey) {
+      try { await window.afterglowDesktop.setDeveloperKey(''); } catch (_) {}
+    }
+  }
+  async function changeDeveloperKey() {
+    await forgetDeveloperKey();
+    try {
+      const key = await ensureDeveloperKey({ forcePrompt: true });
+      if (key) toast(tr('GitHub-Token gespeichert.','GitHub token saved.'));
+      else toast(tr('Kein Token eingegeben.','No token entered.'));
+      if ($('developer-status')) $('developer-status').textContent = key ? tr('Token OK','Token OK') : tr('Kein Token','No token');
+    } catch (error) {
+      toast(error.message || String(error));
+      if ($('developer-status')) $('developer-status').textContent = error.message || String(error);
+    }
   }
   async function developerDeleteLevel(packageId) {
     if (appMode !== 'developer' || !packageId || !window.afterglowDesktop) return;
@@ -1584,6 +1605,7 @@
     }catch(_){/* Keep the local library available if the hidden level directory cannot be read. */}})().finally(()=>{levelsSyncPromise=null;});return levelsSyncPromise;
   }
   $('developer-cloud-refresh')?.addEventListener('click',()=>renderDeveloperCloud());
+  $('developer-change-token')?.addEventListener('click',()=>changeDeveloperKey());
   $('developer-save-version').addEventListener('click',async()=>{if(appMode!=='developer'||!window.afterglowDesktop)return;try{const result=await window.afterglowDesktop.saveVersion($('developer-version').value);contentVersion=result.version;$('developer-version').value=contentVersion;$('developer-status').textContent=`v${contentVersion} lokal gespeichert`;toast(tr('Version lokal gespeichert. Für Spieler: APP-UPDATE VERÖFFENTLICHEN.','Version saved locally. For players: PUBLISH APP UPDATE.'));}catch(error){$('developer-status').textContent=error.message;toast(`${tr('Version ungültig:','Invalid version:')} ${error.message}`);}});
   async function refreshLegacyAutoMaps(){for(const song of state.songs){if(song.mapSource!=='audio-analysis'||Number(song.mapVersion)>=5)continue;const audio=await mediaGet(song.audioKey).catch(()=>null);if(!audio)continue;const edited=Boolean(song.mapEdited),previous=song.difficulties;if(await autoMapSong(song,audio)){if(edited){const generated=song.difficulties;song.difficulties={...previous,'Expert+':generated['Expert+']};song.mapVersion=5;}persist();renderSongs($('song-search').value);renderEditor();}}}
   $('cloud-check-updates')?.addEventListener('click',async()=>{
