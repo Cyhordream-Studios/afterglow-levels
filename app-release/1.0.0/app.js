@@ -1410,6 +1410,29 @@
   function setAppStatus(text){
     const el=$('app-update-status');if(el)el.textContent=text;
   }
+  function fillAppVersionSelect(info){
+    const sel=$('app-version-select');if(!sel)return;
+    const local=info?.localVersion||'';
+    const versions=[...(info?.versions||[])];
+    if(info?.remoteVersion&&!versions.includes(info.remoteVersion))versions.unshift(info.remoteVersion);
+    if(local&&!versions.includes(local))versions.unshift(local);
+    const uniq=[...new Set(versions.filter(Boolean))];
+    sel.innerHTML=uniq.length?uniq.map(v=>{
+      const tag=v===local?tr(' (aktuell)',' (current)'):compareVersionClient(v,local)<0?tr(' (älter)',' (older)'):tr(' (neuer)',' (newer)');
+      return `<option value="${attr(v)}" ${v===local?'selected':''}>v${escapeHtml(v)}${tag}</option>`;
+    }).join(''):`<option value="">${tr('Keine Versionen gefunden','No versions found')}</option>`;
+    const apply=$('app-download-update');
+    if(apply)apply.disabled=!uniq.some(v=>v&&v!==local)&&!uniq.length;
+    // Enable install whenever a different version exists or same (reinstall)
+    if(apply)apply.disabled=!uniq.length;
+  }
+  function compareVersionClient(a,b){
+    const pa=String(a||'0').replace(/^v/i,'').split(/[.+-]/).map(x=>parseInt(x,10)||0);
+    const pb=String(b||'0').replace(/^v/i,'').split(/[.+-]/).map(x=>parseInt(x,10)||0);
+    const n=Math.max(pa.length,pb.length);
+    for(let i=0;i<n;i++){const d=(pa[i]||0)-(pb[i]||0);if(d)return d<0?-1:1;}
+    return 0;
+  }
   async function checkAppUpdates({silent=false}={}){
     const desktop=window.afterglowDesktop;
     if(!desktop?.checkAppUpdate){
@@ -1420,13 +1443,14 @@
     try{
       const info=await desktop.checkAppUpdate();
       pendingAppUpdate=info;
+      fillAppVersionSelect(info);
       if(info.available){
         setAppStatus(tr(
-          `Neues Spiel v${info.remoteVersion} (du hast v${info.localVersion})${info.notes?': '+info.notes:''}`,
-          `New app v${info.remoteVersion} (you have v${info.localVersion})${info.notes?': '+info.notes:''}`
+          `Online: v${info.remoteVersion} · installiert: v${info.localVersion}${info.notes?': '+info.notes:''}`,
+          `Online: v${info.remoteVersion} · installed: v${info.localVersion}${info.notes?': '+info.notes:''}`
         ));
       }else{
-        setAppStatus(tr(`Spiel aktuell · v${info.localVersion||'?'}`,`App up to date · v${info.localVersion||'?'}`));
+        setAppStatus(tr(`Spiel v${info.localVersion||'?'} · ${ (info.versions||[]).length } Version(en) online`,`App v${info.localVersion||'?'} · ${ (info.versions||[]).length } version(s) online`));
       }
       refreshUpdateBadge();
       return info;
@@ -1575,13 +1599,18 @@
     }finally{if(btn)btn.disabled=false;}
   });
   $('app-download-update')?.addEventListener('click',async()=>{
-    if(!pendingAppUpdate?.available||!window.afterglowDesktop?.downloadAppUpdate){
+    if(!window.afterglowDesktop?.downloadAppUpdate){
       toast(tr('Kein Spiel-Update verfügbar.','No app update available.'));return;
     }
+    const selected=($('app-version-select')?.value||'').trim()||pendingAppUpdate?.remoteVersion||'';
+    if(!selected){toast(tr('Bitte eine Version wählen.','Please choose a version.'));return;}
+    const local=pendingAppUpdate?.localVersion||'';
+    const isDown=local&&compareVersionClient(selected,local)<0;
+    if(isDown&&!confirm(tr(`Zu älterer Version v${selected} zurück (jetzt v${local})?`,`Roll back to older v${selected} (now v${local})?`)))return;
     const btn=$('app-download-update');if(btn)btn.disabled=true;
-    setAppStatus(tr('Spiel-Update wird geladen…','Downloading app update…'));
+    setAppStatus(tr(`Lade v${selected}…`,`Downloading v${selected}…`));
     try{
-      const result=await window.afterglowDesktop.downloadAppUpdate();
+      const result=await window.afterglowDesktop.downloadAppUpdate({version:selected});
       if(result.downloaded){
         const err=(result.applyErrors&&result.applyErrors.slice(0,2).join(' | '))||'';
         setAppStatus(tr(
