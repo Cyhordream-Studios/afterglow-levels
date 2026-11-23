@@ -1673,6 +1673,15 @@
     }finally{if(btn)btn.disabled=false;}
   });
   $('app-publish-update-top')?.addEventListener('click',()=>$('app-publish-update')?.click());
+  $('clear-game-files-btn')?.addEventListener('click',async()=>{
+    if(appMode!=='developer'||!window.afterglowDesktop?.clearGameFiles)return;
+    if(!confirm(tr('AppData game-files löschen und neu laden?','Delete AppData game-files and reload?')))return;
+    try{
+      const r=await window.afterglowDesktop.clearGameFiles();
+      toast(tr(`AppData geleert · v${r.version}`,`AppData cleared · v${r.version}`));
+      setAppStatus(tr(`AppData reset · v${r.version}`,`AppData reset · v${r.version}`));
+    }catch(error){toast(error.message||String(error));}
+  });
   $('app-publish-update')?.addEventListener('click',async()=>{
     if(appMode!=='developer'||!window.afterglowDesktop?.publishAppUpdate)return;
     // Always take whatever is currently typed — typos can be fixed and published again.
@@ -1694,8 +1703,8 @@
       contentVersion=result.version;
       if($('developer-version'))$('developer-version').value=result.version;
       if($('developer-status'))$('developer-status').textContent=`App v${result.version} live`;
-      toast(tr(`App v${result.version} veröffentlicht (${result.files} Dateien).`,`App v${result.version} published (${result.files} files).`));
-      setAppStatus(tr(`Zuletzt veröffentlicht: v${result.version}`,`Last published: v${result.version}`));
+      toast(tr(`App v${result.version} veröffentlicht · AppData aktualisiert.`,`App v${result.version} published · AppData updated.`));
+      setAppStatus(tr(`Live v${result.version} · lokal ${result.localVersion||result.version} · ${result.gameDir||''}`,`Live v${result.version} · local ${result.localVersion||result.version} · ${result.gameDir||''}`));
     }catch(error){
       toast(error.message||String(error));
       if($('developer-status'))$('developer-status').textContent=error.message||String(error);

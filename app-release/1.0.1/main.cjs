@@ -350,37 +350,73 @@ function gameFilesDir() {
   return path.join(app.getPath('userData'), 'game-files');
 }
 
-function activeGameDir() {
-  const dir = gameFilesDir();
+function versionInDir(dir) {
   try {
-    if (fssync.existsSync(path.join(dir, 'index.html')) && fssync.existsSync(path.join(dir, 'app.js'))) {
-      return dir;
-    }
-  } catch (_) {}
-  return __dirname;
+    const pkg = JSON.parse(fssync.readFileSync(path.join(dir, 'package.json'), 'utf8'));
+    return String(pkg.version || '').trim();
+  } catch (_) { return ''; }
+}
+
+function dirHasGame(dir) {
+  try {
+    return fssync.existsSync(path.join(dir, 'index.html')) && fssync.existsSync(path.join(dir, 'app.js'));
+  } catch (_) { return false; }
+}
+
+function activeGameDir() {
+  const override = gameFilesDir();
+  const install = __dirname;
+  const vO = versionInDir(override);
+  const vI = versionInDir(install) || (() => { try { return app.getVersion(); } catch (_) { return ''; } })();
+  // Use AppData only if it has game files AND version is >= install (real update).
+  // Otherwise stale AppData was blocking newer project/install files.
+  if (dirHasGame(override) && vO && (!vI || compareVersions(vO, vI) >= 0)) {
+    return override;
+  }
+  return install;
 }
 
 function readLocalGameVersion() {
-  for (const dir of [activeGameDir(), __dirname]) {
-    try {
-      const pkg = JSON.parse(fssync.readFileSync(path.join(dir, 'package.json'), 'utf8'));
-      if (pkg && pkg.version) return String(pkg.version);
-    } catch (_) {}
-  }
+  const v = versionInDir(activeGameDir()) || versionInDir(__dirname);
+  if (v) return v;
   try { return app.getVersion(); } catch (_) { return '0.0.0'; }
+}
+
+async function writeBuffersToDir(dir, fileBuffers) {
+  await fs.mkdir(dir, { recursive: true });
+  const written = [];
+  for (const { name, buffer } of fileBuffers) {
+    const dest = path.join(dir, name);
+    const tmp = `${dest}.new`;
+    await fs.writeFile(tmp, buffer);
+    try {
+      await fs.rm(dest, { force: true });
+      await fs.rename(tmp, dest);
+    } catch (_) {
+      await fs.writeFile(dest, buffer);
+      await fs.rm(tmp, { force: true }).catch(() => {});
+    }
+    written.push(name);
+  }
+  return written;
 }
 
 async function ensureGameFilesSeeded() {
   const dir = gameFilesDir();
   await fs.mkdir(dir, { recursive: true });
-  // Copy baseline from install once so overrides always have a full set.
+  const vO = versionInDir(dir);
+  const vI = versionInDir(__dirname);
+  // If AppData is missing files, or install is NEWER, refresh AppData from install.
+  const needsRefresh = !dirHasGame(dir) || (vI && (!vO || compareVersions(vI, vO) > 0));
+  if (!needsRefresh) return { refreshed: false, version: vO };
+  const buffers = [];
   for (const name of APP_UPDATE_FILES) {
-    const dest = path.join(dir, name);
-    if (fssync.existsSync(dest)) continue;
     const src = path.join(__dirname, name);
     if (!fssync.existsSync(src)) continue;
-    try { await fs.copyFile(src, dest); } catch (_) {}
+    buffers.push({ name, buffer: await fs.readFile(src) });
   }
+  if (buffers.length) await writeBuffersToDir(dir, buffers);
+  return { refreshed: true, version: versionInDir(dir) || vI };
 }
 
 async function listAppReleaseVersions() {
@@ -595,7 +631,24 @@ async function publishAppUpdate(givenToken, notes = '', versionOverride = '') {
     await fs.writeFile(path.join(levelsDirectory, 'app-version.json'), JSON.stringify({ version }, null, 2), 'utf8');
   } catch (_) {}
   await commitFiles(token, files, `App update ${version}`);
-  return { version, files: files.length - 1, published: files.map(f => f.path) };
+  // Sync AppData + local install so "installed" version matches what was just published.
+  const localBuffers = files
+    .filter(f => f.path.startsWith('app-release/'))
+    .map(f => ({ name: path.basename(f.path), buffer: f.buffer }));
+  const synced = [];
+  try {
+    await writeBuffersToDir(gameFilesDir(), localBuffers);
+    synced.push(gameFilesDir());
+  } catch (error) {
+    console.error('[afterglow] publish→AppData failed', error);
+  }
+  try {
+    await writeBuffersToDir(__dirname, localBuffers);
+    synced.push(__dirname);
+  } catch (error) {
+    console.error('[afterglow] publish→install failed', error);
+  }
+  return { version, files: files.length - 1, published: files.map(f => f.path), synced, gameDir: activeGameDir(), localVersion: readLocalGameVersion() };
 }
 
 
@@ -642,14 +695,18 @@ function registerIpc() {
     await fs.mkdir(levelsDirectory, { recursive: true });
     await fs.writeFile(path.join(levelsDirectory, 'app-version.json'), JSON.stringify({ version: value }, null, 2), 'utf8');
     // Best-effort: update package.json on disk for unpacked/portable (asar false).
-    try {
-      const pkgPath = path.join(__dirname, 'package.json');
-      const json = JSON.parse(await fs.readFile(pkgPath, 'utf8'));
-      json.version = value;
-      await fs.writeFile(pkgPath, JSON.stringify(json, null, 2) + String.fromCharCode(10), 'utf8');
-    } catch (_) { /* packaged asar or missing file */ }
+    for (const dir of [__dirname, gameFilesDir()]) {
+      try {
+        await fs.mkdir(dir, { recursive: true });
+        const pkgPath = path.join(dir, 'package.json');
+        let json = {};
+        try { json = JSON.parse(await fs.readFile(pkgPath, 'utf8')); } catch (_) { json = { name: 'afterglow-rhythm' }; }
+        json.version = value;
+        await fs.writeFile(pkgPath, JSON.stringify(json, null, 2) + String.fromCharCode(10), 'utf8');
+      } catch (_) { /* ignore */ }
+    }
     notifyLevelsChanged();
-    return { version: value };
+    return { version: value, gameDir: activeGameDir() };
   });
 
   // Cloud levels: publishing and deleting are developer-only and need this PC's developer key.
@@ -699,7 +756,14 @@ function registerIpc() {
     if (senderMode(event) !== 'developer') throw new Error('Nur der Developer-Modus kann App-Updates veröffentlichen.');
     return publishAppUpdate(payload.deviceKey, payload.notes, payload.version);
   });
-  ipcMain.handle('afterglow:get-app-version', async () => ({ version: readLocalGameVersion(), gameDir: activeGameDir() }));
+  ipcMain.handle('afterglow:get-app-version', async () => ({ version: readLocalGameVersion(), gameDir: activeGameDir(), appData: gameFilesDir() }));
+  ipcMain.handle('afterglow:clear-game-files', async (event) => {
+    if (senderMode(event) !== 'developer') throw new Error('Nur Developer kann AppData-Game-Files löschen.');
+    const dir = gameFilesDir();
+    await fs.rm(dir, { recursive: true, force: true });
+    await ensureGameFilesSeeded();
+    return { cleared: true, gameDir: activeGameDir(), version: readLocalGameVersion() };
+  });
 }
 
 function createWindow(mode) {

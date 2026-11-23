@@ -22,6 +22,7 @@ contextBridge.exposeInMainWorld('afterglowDesktop', {
   downloadAppUpdate: (payload) => invoke('afterglow:download-app-update', payload || {}),
   publishAppUpdate: (payload) => invoke('afterglow:publish-app-update', payload),
   getAppVersion: () => invoke('afterglow:get-app-version'),
+  clearGameFiles: () => invoke('afterglow:clear-game-files'),
   onLevelsChanged: (callback) => {
     if (typeof callback !== 'function') return () => {};
     const handler = () => {

@@ -3,5 +3,42 @@
   "version": "1.0.1",
   "private": true,
   "description": "AFTERGLOW 2D Rhythm Game",
-  "main": "main.cjs"
+  "main": "main.cjs",
+  "scripts": {
+    "start": "electron .",
+    "start:dev": "electron . --developer",
+    "build:win": "electron-builder --win portable"
+  },
+  "devDependencies": {
+    "electron": "^45.4.1",
+    "electron-builder": "^26.18.1"
+  },
+  "build": {
+    "appId": "com.afterglow.rhythm",
+    "productName": "AFTERGLOW",
+    "asar": false,
+    "files": [
+      "index.html",
+      "app.js",
+      "style.css",
+      "extras.css",
+      "main.cjs",
+      "preload.cjs",
+      "README.md",
+      "package.json"
+    ],
+    "directories": {
+      "output": "dist"
+    },
+    "win": {
+      "target": [
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    }
+  }
 }
