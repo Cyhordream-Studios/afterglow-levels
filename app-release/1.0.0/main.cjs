@@ -322,7 +322,7 @@ async function listLevels() {
 
 // ---------------------------------------------------------------------------
 // App self-update (portable / unpacked): app-update.json + app-release/{version}/*
-// Only the game files are swapped on next launch — not the whole OS installer.
+// Files stage into .afterglow-update, then copy into the real app folder on boot.
 // ---------------------------------------------------------------------------
 const APP_UPDATE_FILES = ['app.js', 'index.html', 'style.css', 'extras.css', 'main.cjs', 'preload.cjs', 'package.json'];
 
@@ -338,27 +338,65 @@ function compareVersions(a, b) {
 }
 
 function portableRootDir() {
-  // electron-builder portable: persistent folder next to the .exe
   if (process.env.PORTABLE_EXECUTABLE_DIR) return process.env.PORTABLE_EXECUTABLE_DIR;
-  try {
-    return path.dirname(process.execPath);
-  } catch (_) {
-    return app.getPath('userData');
-  }
+  try { return path.dirname(process.execPath); } catch (_) { return app.getPath('userData'); }
 }
 
 function pendingUpdateDir() {
-  // Prefer next to portable EXE so updates survive temp re-extracts.
-  const root = portableRootDir();
-  return path.join(root, '.afterglow-update');
+  return path.join(portableRootDir(), '.afterglow-update');
 }
 
-function appInstallDir() {
+function isAsarBuild() {
   try {
-    const appPath = app.getAppPath();
-    if (appPath && !String(appPath).includes('app.asar')) return appPath;
+    if (String(app.getAppPath() || '').includes('app.asar')) return true;
+    if (String(__dirname || '').includes('app.asar')) return true;
   } catch (_) {}
-  return __dirname;
+  return false;
+}
+
+function appInstallDirs() {
+  const dirs = [];
+  const add = (dir) => {
+    if (!dir || dirs.includes(dir)) return;
+    try {
+      if (fssync.existsSync(dir) && fssync.statSync(dir).isDirectory()) dirs.push(dir);
+    } catch (_) {}
+  };
+  try {
+    const ap = app.getAppPath();
+    if (ap && !String(ap).includes('app.asar')) add(ap);
+  } catch (_) {}
+  if (process.resourcesPath) {
+    add(path.join(process.resourcesPath, 'app'));
+    add(process.resourcesPath);
+  }
+  add(__dirname);
+  try { add(path.join(path.dirname(process.execPath), 'resources', 'app')); } catch (_) {}
+  // Prefer folders that already contain our game files.
+  const ranked = dirs.filter(d =>
+    fssync.existsSync(path.join(d, 'package.json')) ||
+    fssync.existsSync(path.join(d, 'main.cjs')) ||
+    fssync.existsSync(path.join(d, 'app.js'))
+  );
+  return ranked.length ? ranked : dirs;
+}
+
+async function writeReplace(src, dest) {
+  const data = await fs.readFile(src);
+  const tmp = `${dest}.afterglow-new`;
+  await fs.writeFile(tmp, data);
+  try {
+    await fs.rm(dest, { force: true });
+    await fs.rename(tmp, dest);
+  } catch (_) {
+    try {
+      await fs.writeFile(dest, data);
+      await fs.rm(tmp, { force: true });
+    } catch (error) {
+      await fs.rm(tmp, { force: true }).catch(() => {});
+      throw error;
+    }
+  }
 }
 
 async function readAppUpdateManifest() {
@@ -373,7 +411,9 @@ async function readAppUpdateManifest() {
     if (response.status === 404) return { configured: true, available: false, localVersion: app.getVersion() };
     throw new Error(`App-Update-Info fehlgeschlagen (${response.status})`);
   }
-  const data = await response.json();
+  const text = await response.text();
+  let data;
+  try { data = JSON.parse(text); } catch (_) { throw new Error('app-update.json ist ungültig'); }
   const remoteVersion = String(data.version || '').trim();
   const localVersion = app.getVersion();
   const available = Boolean(remoteVersion && compareVersions(remoteVersion, localVersion) > 0);
@@ -383,74 +423,110 @@ async function readAppUpdateManifest() {
     localVersion,
     remoteVersion,
     notes: String(data.notes || ''),
-    files: Array.isArray(data.files) ? data.files : APP_UPDATE_FILES,
+    files: Array.isArray(data.files) && data.files.length ? data.files : APP_UPDATE_FILES,
     updatedAt: data.updatedAt || '',
+    asar: isAsarBuild(),
+    installDirs: appInstallDirs(),
   };
 }
 
-async function downloadAppUpdate() {
+async function downloadRemoteFile(remotePath) {
+  const encoded = remotePath.split('/').map(encodeURIComponent).join('/');
+  let response = await fetch(`${GITHUB_API}/contents/${encoded}?ref=${LEVEL_REPO.branch}`, {
+    cache: 'no-store',
+    headers: { ...githubHeaders(), Accept: 'application/vnd.github.raw' },
+  }).catch(() => null);
+  if (!response?.ok) {
+    response = await fetch(`${GITHUB_RAW}/${encoded}`, { cache: 'no-store', headers: { 'User-Agent': 'AFTERGLOW' } });
+  }
+  if (!response?.ok) throw new Error(`${remotePath} (${response ? response.status : 'netz'})`);
+  const buf = Buffer.from(await response.arrayBuffer());
+  if (!buf.length) throw new Error(`${remotePath} leer`);
+  return buf;
+}
+
+async function downloadAppUpdate({ force = false } = {}) {
+  if (isAsarBuild()) {
+    throw new Error('Dieser Build nutzt app.asar — Datei-Updates gehen nicht. Neu bauen mit "asar": false in package.json (win-unpacked).');
+  }
   const info = await readAppUpdateManifest();
-  if (!info.available) return { ...info, downloaded: false, reason: 'already-latest' };
-  const version = info.remoteVersion;
+  if (!info.available && !force) return { ...info, downloaded: false, reason: 'already-latest' };
+  const version = info.remoteVersion || app.getVersion();
+  if (!version) throw new Error('Keine Remote-Version in app-update.json');
   const dir = pendingUpdateDir();
   await fs.rm(dir, { recursive: true, force: true });
   await fs.mkdir(dir, { recursive: true });
-  const files = info.files.length ? info.files : APP_UPDATE_FILES;
-  for (const name of files) {
-    const base = path.basename(String(name));
+  const files = info.files.length ? info.files.map(f => path.basename(String(f))) : APP_UPDATE_FILES.slice();
+  const saved = [];
+  for (const base of files) {
     if (!APP_UPDATE_FILES.includes(base)) continue;
-    const remotePath = `app-release/${version}/${base}`;
-    const encoded = remotePath.split('/').map(encodeURIComponent).join('/');
-    let response = await fetch(`${GITHUB_API}/contents/${encoded}?ref=${LEVEL_REPO.branch}`, {
-      cache: 'no-store',
-      headers: { ...githubHeaders(), Accept: 'application/vnd.github.raw' },
-    }).catch(() => null);
-    if (!response?.ok) {
-      response = await fetch(`${GITHUB_RAW}/${encoded}`, { cache: 'no-store', headers: { 'User-Agent': 'AFTERGLOW' } });
-    }
-    if (!response.ok) throw new Error(`Datei fehlt im Update: ${base} (${response.status})`);
-    const buf = Buffer.from(await response.arrayBuffer());
-    if (!buf.length) throw new Error(`Leere Update-Datei: ${base}`);
+    const buf = await downloadRemoteFile(`app-release/${version}/${base}`);
     await fs.writeFile(path.join(dir, base), buf);
+    saved.push(base);
   }
+  if (!saved.length) throw new Error('Keine Update-Dateien heruntergeladen. Auf GitHub unter app-release/' + version + '/ prüfen.');
   await fs.writeFile(path.join(dir, 'update-meta.json'), JSON.stringify({
     version,
     notes: info.notes,
-    files,
+    files: saved,
     downloadedAt: new Date().toISOString(),
   }, null, 2));
-  return { ...info, downloaded: true, pendingPath: dir };
+  return { ...info, downloaded: true, pendingPath: dir, savedFiles: saved, version };
 }
 
 async function applyPendingAppUpdate() {
   const dir = pendingUpdateDir();
   const metaPath = path.join(dir, 'update-meta.json');
-  if (!fssync.existsSync(metaPath)) return { applied: false };
+  if (!fssync.existsSync(metaPath)) return { applied: false, reason: 'no-pending' };
+  if (isAsarBuild()) {
+    return { applied: false, reason: 'asar', errors: ['asar-build'] };
+  }
   const meta = JSON.parse(await fs.readFile(metaPath, 'utf8'));
   const files = Array.isArray(meta.files) ? meta.files : APP_UPDATE_FILES;
-  const targetDir = appInstallDir();
+  const targets = appInstallDirs();
+  if (!targets.length) return { applied: false, reason: 'no-target', errors: ['Kein App-Ordner gefunden'] };
   let copied = 0;
   const errors = [];
-  for (const name of files) {
-    const base = path.basename(String(name));
-    if (!APP_UPDATE_FILES.includes(base)) continue;
-    const src = path.join(dir, base);
-    if (!fssync.existsSync(src)) continue;
-    const dest = path.join(targetDir, base);
-    try {
-      await fs.copyFile(src, dest);
-      copied++;
-    } catch (error) {
-      errors.push(`${base}: ${error.message}`);
+  const copiedTo = [];
+  for (const targetDir of targets) {
+    for (const name of files) {
+      const base = path.basename(String(name));
+      if (!APP_UPDATE_FILES.includes(base)) continue;
+      const src = path.join(dir, base);
+      if (!fssync.existsSync(src)) continue;
+      const dest = path.join(targetDir, base);
+      try {
+        await writeReplace(src, dest);
+        copied++;
+        copiedTo.push(dest);
+      } catch (error) {
+        errors.push(`${dest}: ${error.message}`);
+      }
     }
   }
-  // Keep the pending folder for portable builds that re-extract on every launch.
-  // Only delete after a successful copy when NOT portable (dev/unpacked persistent path).
+  // Verify package.json version when present
+  let verified = false;
+  for (const targetDir of targets) {
+    try {
+      const pkg = JSON.parse(await fs.readFile(path.join(targetDir, 'package.json'), 'utf8'));
+      if (String(pkg.version) === String(meta.version)) verified = true;
+    } catch (_) {}
+  }
   const isPortable = Boolean(process.env.PORTABLE_EXECUTABLE_DIR);
-  if (copied && !isPortable) {
+  if (copied && verified && !isPortable) {
     try { await fs.rm(dir, { recursive: true, force: true }); } catch (_) {}
   }
-  return { applied: copied > 0, version: meta.version || '', copied, targetDir, errors, portable: isPortable };
+  return {
+    applied: copied > 0,
+    version: meta.version || '',
+    copied,
+    targetDir: targets[0],
+    targets,
+    errors,
+    verified,
+    portable: isPortable,
+    copiedTo: copiedTo.slice(0, 12),
+  };
 }
 
 async function normalizeAppVersion(value) {
@@ -478,12 +554,13 @@ async function publishAppUpdate(givenToken, notes = '', versionOverride = '') {
       try {
         const json = JSON.parse(buffer.toString('utf8'));
         json.version = version;
+        if (json.build) json.build.asar = false;
         buffer = Buffer.from(JSON.stringify(json, null, 2) + String.fromCharCode(10));
       } catch (_) {}
     }
     files.push({ path: `app-release/${version}/${name}`, buffer });
   }
-  if (!files.length) throw new Error('Keine App-Dateien zum Veröffentlichen gefunden.');
+  if (!files.length) throw new Error('Keine App-Dateien zum Veröffentlichen gefunden (falscher Startordner?).');
   const manifest = Buffer.from(JSON.stringify({
     version,
     notes: String(notes || '').slice(0, 500),
@@ -496,8 +573,9 @@ async function publishAppUpdate(givenToken, notes = '', versionOverride = '') {
     await fs.writeFile(path.join(levelsDirectory, 'app-version.json'), JSON.stringify({ version }, null, 2), 'utf8');
   } catch (_) {}
   await commitFiles(token, files, `App update ${version}`);
-  return { version, files: files.length - 1 };
+  return { version, files: files.length - 1, published: files.map(f => f.path) };
 }
+
 
 function notifyLevelsChanged() {
   clearTimeout(changeTimer);
@@ -577,21 +655,22 @@ function registerIpc() {
   });
   ipcMain.handle('afterglow:check-app-update', async () => readAppUpdateManifest());
   ipcMain.handle('afterglow:download-app-update', async () => {
-    const result = await downloadAppUpdate();
+    // Stage into .afterglow-update, apply what we can, then hard relaunch.
+    // Locked files (main.cjs) are applied on the next boot in whenReady.
+    const result = await downloadAppUpdate({ force: true });
     if (result.downloaded) {
       const applied = await applyPendingAppUpdate();
       result.applied = applied.applied;
       result.copied = applied.copied;
       result.targetDir = applied.targetDir;
+      result.targets = applied.targets;
       result.applyErrors = applied.errors || [];
+      result.verified = applied.verified;
       result.portable = applied.portable;
-      // Relaunch so renderer loads new app.js immediately.
-      if (applied.applied) {
-        setTimeout(() => {
-          app.relaunch();
-          app.exit(0);
-        }, 600);
-      }
+      setTimeout(() => {
+        app.relaunch();
+        app.exit(0);
+      }, 800);
     }
     return result;
   });
@@ -636,9 +715,9 @@ app.whenReady().then(async () => {
   try {
     const applied = await applyPendingAppUpdate();
     if (applied.applied) {
-      console.log('[afterglow] applied app update', applied.version, '→', applied.targetDir, 'files', applied.copied);
-    } else if (applied.errors?.length) {
-      console.error('[afterglow] app update partial failures', applied.errors);
+      console.log('[afterglow] applied app update', applied);
+    } else if (applied.reason && applied.reason !== 'no-pending') {
+      console.warn('[afterglow] app update not applied', applied);
     }
   } catch (error) {
     console.error('[afterglow] pending app update failed', error);

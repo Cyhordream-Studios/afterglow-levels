@@ -1583,20 +1583,15 @@
     try{
       const result=await window.afterglowDesktop.downloadAppUpdate();
       if(result.downloaded){
-        if(result.applied){
-          setAppStatus(tr(
-            `v${result.remoteVersion} installiert (${result.copied||0} Dateien). App startet neu…`,
-            `v${result.remoteVersion} installed (${result.copied||0} files). Relaunching…`
-          ));
-          toast(tr('Spiel-Update installiert — Neustart…','App update installed — restarting…'));
-        }else{
-          const err=(result.applyErrors&&result.applyErrors[0])||'';
-          setAppStatus(tr(
-            `Download ok, Install unvollständig. ${err} Ordner: ${result.targetDir||'?'}`,
-            `Download ok, install incomplete. ${err} Folder: ${result.targetDir||'?'}`
-          ));
-          toast(tr('Update geladen, aber Dateien konnten nicht ersetzt werden.','Update downloaded but files could not be replaced.'));
-        }
+        const err=(result.applyErrors&&result.applyErrors.slice(0,2).join(' | '))||'';
+        setAppStatus(tr(
+          `v${result.remoteVersion||result.version}: ${result.copied||0} Dateien → ${result.targetDir||'?'} ${err?('· '+err):''}. Neustart…`,
+          `v${result.remoteVersion||result.version}: ${result.copied||0} files → ${result.targetDir||'?'} ${err?('· '+err):''}. Restarting…`
+        ));
+        toast(tr('Update geladen — App startet neu…','Update downloaded — app restarting…'));
+      }else if(result.asar){
+        setAppStatus(tr('Build mit app.asar erkannt. Bitte mit asar:false neu bauen (win-unpacked).','asar build detected. Rebuild with asar:false (win-unpacked).'));
+        toast(tr('asar-Build kann sich nicht selbst updaten.','asar build cannot self-update.'));
       }else{
         setAppStatus(tr('Bereits aktuell.','Already up to date.'));
       }
